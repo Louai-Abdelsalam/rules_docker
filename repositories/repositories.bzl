@@ -38,7 +38,7 @@ def repositories():
             executable = True,
             # sha256 = "08b8963cce9234f57055bafc7cadd1624cdce3c5990048cea1df453d7d288bc6",
             # urls = [("https://storage.googleapis.com/rules_docker/" + RULES_DOCKER_GO_BINARY_RELEASE + "/puller-linux-amd64")],
-            sha256 = "da4f97c38706f5837777a685c0e8eb1d352631032df9bb6463fbb9b71bd52dbc",
+            sha256 = "4908dce7492129dca9a7ab5e3181b9352318ba32a514c0ce0caec786562bda00",
             urls = ["https://public-mirror.evertz.tools/github.com/Louai-Abdelsalam/rules_docker/binaries/puller-linux-amd64"]
         )
 
