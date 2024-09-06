@@ -64,6 +64,13 @@ _container_pull_attrs = {
             """,
         mandatory = False,
     ),
+    "client_certs_dir": attr.string(
+        doc = """
+        The path to the directory where each subdirectory matches a registry's hostname.
+        Defaults to default path used by docker i.e '/etc/docker/certs.d'.
+        Ref: https://docs.docker.com/engine/security/certificates/.
+        """,
+    ),
     "cred_helpers": attr.label_list(
         doc = """Labels to a list of credential helper binaries that are configured in `docker_client_config`.
 
@@ -180,6 +187,10 @@ def _impl(repository_ctx):
     docker_client_config = repository_ctx.attr.docker_client_config
     if docker_client_config:
         args += ["-client-config-dir", repository_ctx.path(docker_client_config).dirname]
+    
+    client_certs_dir = repository_ctx.attr.client_certs_dir
+    if client_certs_dir:
+        args += ["-client-certs-dir", client_certs_dir]
 
     cache_dir = repository_ctx.os.environ.get("DOCKER_REPO_CACHE")
     if cache_dir:

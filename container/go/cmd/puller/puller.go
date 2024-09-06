@@ -26,8 +26,12 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"crypto/tls"
 	ospkg "os"
+	"io/ioutil"
 	"strings"
+	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
@@ -45,6 +49,7 @@ var (
 	imgName         = flag.String("name", "", "The name location including repo and digest/tag of the docker image to pull and save. Supports fully-qualified tag or digest references.")
 	directory       = flag.String("directory", "", "Where to save the images files. If pulling as Docker tarball, please specify the directory to save the tarball. The tarball is named as image.tar.")
 	clientConfigDir = flag.String("client-config-dir", "", "The path to the directory where the client configuration files are located. Overiddes the value from DOCKER_CONFIG.")
+	clientCertsDir  = flag.String("client-certs-dir", "/etc/docker/certs.d", "The path to the directory where each subdirectory matches a registry's hostname (ref: https://docs.docker.com/engine/security/certificates/). When this flag is given a path, the subfolder matching the registry in the 'name' flag will be checked for a key (ext: key) and a certificate (ext: cert), and if both exist they will be sent along the image pull request.")
 	cachePath       = flag.String("cache", "", "Image's files cache directory.")
 	arch            = flag.String("architecture", "", "Image platform's CPU architecture.")
 	os              = flag.String("os", "", "Image's operating system, if referring to a multi-platform manifest list. Default linux.")
@@ -59,6 +64,53 @@ var (
 // that the image was (probably) not tagged with this, but avoids
 // applying the ":latest" tag which might be misleading.
 const iWasADigestTag = "i-was-a-digest"
+const certExt = "cert"
+const keyExt = "key"
+
+func folderExists(path string) bool {
+	_, err := ospkg.Stat(path)
+
+	if err == nil {	return true	} else { return false }
+}
+
+func getRegistryName() string {
+	imgNameWithoutDigestSha := strings.Split(*imgName, "@")
+	registryName := strings.Split(imgNameWithoutDigestSha[0], "/")[0]
+	return registryName
+}
+
+func findAndGetCertAndKey() map[string]string {
+	certAndKey := map[string]string{}
+
+	if ! folderExists(*clientCertsDir) { return certAndKey }
+
+	registryName := getRegistryName()
+	keysPath := path.Join(*clientCertsDir, registryName)
+
+	if ! folderExists(keysPath) { return certAndKey	}
+
+	files, _ := ioutil.ReadDir(keysPath)
+
+	for _, file := range files {
+		if filepath.Ext(file.Name()) == ("." + certExt) {
+			if certAndKey[certExt] != "" {
+				log.Fatalf("Found more than one certificate file in the client certs directory (i.e here '%v').", keysPath)
+			}
+			certAndKey[certExt] = path.Join(keysPath, file.Name())
+		} else if filepath.Ext(file.Name()) == ("." + keyExt) {
+			if certAndKey[keyExt] != "" {
+				log.Fatalf("Found more than one key file in the client certs directory (i.e here '%v').\n", keysPath)
+			}
+			certAndKey[keyExt] = path.Join(keysPath, file.Name())
+		}
+	}
+
+	if certAndKey[certExt] == "" || certAndKey[keyExt] == "" {
+		log.Println("Either the cert or the key (or both) were not found in the client certs directory's registry subfolder (i.e here '%v').\n", keysPath)
+	}
+
+	return certAndKey
+}
 
 // getTag parses the reference inside the name flag and returns the apt tag.
 // WriteToFile requires a tag to write to the tarball, but may have been given a digest,
@@ -134,7 +186,26 @@ func main() {
 		Features:     strings.Fields(*features),
 	}
 
+	clientCertificates := []tls.Certificate{}
+
+	certAndKey := findAndGetCertAndKey()
+	if certAndKey[certExt] != "" && certAndKey[keyExt] != "" {
+		// https://pkg.go.dev/crypto/tls#Certificate
+		// https://pkg.go.dev/crypto/tls#LoadX509KeyPair
+		clientCert, err := tls.LoadX509KeyPair(certAndKey[certExt], certAndKey[keyExt])
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		clientCertificates = append(clientCertificates, clientCert)
+	}
+
+	// https://github.com/google/go-containerregistry/issues/1613
+	// https://pkg.go.dev/crypto/tls#Config
+	tlsConfig := &tls.Config{Certificates: clientCertificates}
 	dur := time.Duration(*timeout) * time.Second
+
+	// https://pkg.go.dev/net/http#Transport
 	t := &http.Transport{
 		Dial: func(network, addr string) (net.Conn, error) {
 			d := net.Dialer{Timeout: dur, KeepAlive: dur}
@@ -152,6 +223,7 @@ func main() {
 		ResponseHeaderTimeout: dur,
 		ExpectContinueTimeout: dur,
 		Proxy:                 http.ProxyFromEnvironment,
+		TLSClientConfig:	   tlsConfig,
 	}
 
 	if err := pull(*imgName, *directory, *cachePath, platform, t); err != nil {
